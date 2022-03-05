@@ -10,6 +10,7 @@ using System.Reflection;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Http.Metadata;
 using Microsoft.Extensions.DependencyInjection;
@@ -33,6 +34,11 @@ public static partial class RequestDelegateFactory
     private static readonly MethodInfo ExecuteValueTaskOfStringMethod = typeof(RequestDelegateFactory).GetMethod(nameof(ExecuteValueTaskOfString), BindingFlags.NonPublic | BindingFlags.Static)!;
     private static readonly MethodInfo ExecuteTaskResultOfTMethod = typeof(RequestDelegateFactory).GetMethod(nameof(ExecuteTaskResult), BindingFlags.NonPublic | BindingFlags.Static)!;
     private static readonly MethodInfo ExecuteValueResultTaskOfTMethod = typeof(RequestDelegateFactory).GetMethod(nameof(ExecuteValueTaskResult), BindingFlags.NonPublic | BindingFlags.Static)!;
+    private static readonly MethodInfo ExecuteAwaitableVoidResultMethod = typeof(RequestDelegateFactory).GetMethod(nameof(ExecuteAwaitableVoidResult), BindingFlags.NonPublic | BindingFlags.Static)!;
+    private static readonly MethodInfo ExecuteAwaitableObjectResultMethod = typeof(RequestDelegateFactory).GetMethod(nameof(ExecuteAwaitableObjectResult), BindingFlags.NonPublic | BindingFlags.Static)!;
+    private static readonly MethodInfo ExecuteAwaitableResultMethod = typeof(RequestDelegateFactory).GetMethod(nameof(ExecuteAwaitableResult), BindingFlags.NonPublic | BindingFlags.Static)!;
+    private static readonly MethodInfo ExecuteAwaitableStringResultMethod = typeof(RequestDelegateFactory).GetMethod(nameof(ExecuteAwaitableStringResult), BindingFlags.NonPublic | BindingFlags.Static)!;
+    private static readonly MethodInfo ExecuteAwaitableOfTResultMethod = typeof(RequestDelegateFactory).GetMethod(nameof(ExecuteAwaitableOfTResult), BindingFlags.NonPublic | BindingFlags.Static)!;
     private static readonly MethodInfo ExecuteObjectReturnMethod = typeof(RequestDelegateFactory).GetMethod(nameof(ExecuteObjectReturn), BindingFlags.NonPublic | BindingFlags.Static)!;
     private static readonly MethodInfo GetRequiredServiceMethod = typeof(ServiceProviderServiceExtensions).GetMethod(nameof(ServiceProviderServiceExtensions.GetRequiredService), BindingFlags.Public | BindingFlags.Static, new Type[] { typeof(IServiceProvider) })!;
     private static readonly MethodInfo GetServiceMethod = typeof(ServiceProviderServiceExtensions).GetMethod(nameof(ServiceProviderServiceExtensions.GetService), BindingFlags.Public | BindingFlags.Static, new Type[] { typeof(IServiceProvider) })!;
@@ -55,6 +61,7 @@ public static partial class RequestDelegateFactory
     private static readonly ParameterExpression BodyValueExpr = Expression.Parameter(typeof(object), "bodyValue");
     private static readonly ParameterExpression WasParamCheckFailureExpr = Expression.Variable(typeof(bool), "wasParamCheckFailure");
     private static readonly ParameterExpression BoundValuesArrayExpr = Expression.Parameter(typeof(object[]), "boundValues");
+    private static readonly ParameterExpression ActionExpr = Expression.Parameter(typeof(Action), "action");
 
     private static readonly ParameterExpression HttpContextExpr = ParameterBindingMethodCache.HttpContextExpr;
     private static readonly MemberExpression RequestServicesExpr = Expression.Property(HttpContextExpr, typeof(HttpContext).GetProperty(nameof(HttpContext.RequestServices))!);
@@ -477,7 +484,7 @@ public static partial class RequestDelegateFactory
             var convert = Expression.Convert(methodCall, typeof(object));
             return Expression.Call(ExecuteObjectReturnMethod, convert, HttpContextExpr);
         }
-        else if (AwaitableInfo.IsTypeAwaitable(returnType, out _))
+        else if (AwaitableInfo.IsTypeAwaitable(returnType, out var awaitableInfo))
         {
             if (returnType == typeof(Task))
             {
@@ -547,8 +554,93 @@ public static partial class RequestDelegateFactory
             }
             else
             {
-                // TODO: Handle custom awaitables
-                throw new NotSupportedException($"Unsupported return type: {returnType}");
+                var resultType = awaitableInfo.ResultType;
+
+                MethodInfo methodInfo;
+                ConstructorInfo constructorInfo;
+
+                var awaitableParameter = Expression.Parameter(returnType, "awaitable");
+                var awaiterParameter = Expression.Parameter(awaitableInfo.AwaiterType, "awaiter");
+
+                var getAwaiterLambda = Expression.Lambda(Expression.Call(awaitableParameter, awaitableInfo.GetAwaiterMethod), awaitableParameter);
+                var isCompletedLambda = Expression.Lambda(Expression.Property(awaiterParameter, awaitableInfo.AwaiterIsCompletedProperty), awaiterParameter);
+                var getResultLambda = Expression.Lambda(Expression.Call(awaiterParameter, awaitableInfo.AwaiterGetResultMethod), awaiterParameter);
+                var onCompletedLambda = Expression.Lambda(Expression.Call(awaiterParameter, awaitableInfo.AwaiterOnCompletedMethod, ActionExpr), awaiterParameter, ActionExpr);
+                Expression unsafeOnCompletedLambda = awaitableInfo.AwaiterUnsafeOnCompletedMethod != null ? Expression.Lambda(Expression.Call(awaiterParameter, awaitableInfo.AwaiterUnsafeOnCompletedMethod, ActionExpr), awaiterParameter, ActionExpr) : Expression.Constant(null, typeof(Action<,>).MakeGenericType(awaitableInfo.AwaiterType, typeof(Action)));
+
+                if (resultType == typeof(void))
+                {
+                    var typeArgs = new Type[] { returnType, awaitableInfo.AwaiterType };
+
+                    methodInfo = ExecuteAwaitableVoidResultMethod
+                        .MakeGenericMethod(typeArgs);
+
+                    constructorInfo = typeof(ConventionBasedVoidAwaitable<,>)
+                        .MakeGenericType(returnType, awaitableInfo.AwaiterType)
+                        .GetConstructors()[0];
+
+                    return Expression.Call(methodInfo,
+                        Expression.New(
+                            constructorInfo,
+                            methodCall,
+                            getAwaiterLambda,
+                            isCompletedLambda,
+                            getResultLambda,
+                            onCompletedLambda,
+                            unsafeOnCompletedLambda));
+                }
+                else if (resultType == typeof(object))
+                {
+                    methodInfo = ExecuteAwaitableObjectResultMethod
+                        .MakeGenericMethod(returnType, awaitableInfo.AwaiterType);
+
+                    constructorInfo = typeof(ConventionBasedAwaitable<,,>)
+                        .MakeGenericType(returnType, awaitableInfo.AwaiterType, typeof(object))
+                        .GetConstructors()[0];
+                }
+                else if (typeof(IResult).IsAssignableFrom(resultType))
+                {
+                    var typeArgs = new Type[] { returnType, awaitableInfo.AwaiterType, awaitableInfo.ResultType };
+
+                    methodInfo = ExecuteAwaitableResultMethod
+                        .MakeGenericMethod(typeArgs);
+
+                    constructorInfo = typeof(ConventionBasedAwaitable<,,>)
+                        .MakeGenericType(typeArgs)
+                        .GetConstructors()[0];
+                }
+                else if (resultType == typeof(string))
+                {
+                    methodInfo = ExecuteAwaitableStringResultMethod
+                        .MakeGenericMethod(returnType, awaitableInfo.AwaiterType);
+
+                    constructorInfo = typeof(ConventionBasedAwaitable<,,>)
+                        .MakeGenericType(returnType, awaitableInfo.AwaiterType, typeof(string))
+                        .GetConstructors()[0];
+                }
+                else
+                {
+                    var typeArgs = new Type[] { returnType, awaitableInfo.AwaiterType, awaitableInfo.ResultType };
+
+                    methodInfo = ExecuteAwaitableOfTResultMethod
+                        .MakeGenericMethod(typeArgs);
+
+                    constructorInfo = typeof(ConventionBasedAwaitable<,,>)
+                        .MakeGenericType(typeArgs)
+                        .GetConstructors()[0];
+                }
+
+                return Expression.Call(
+                    methodInfo,
+                     Expression.New(
+                        constructorInfo,
+                        methodCall,
+                        getAwaiterLambda,
+                        isCompletedLambda,
+                        getResultLambda,
+                        onCompletedLambda,
+                        unsafeOnCompletedLambda),
+                    HttpContextExpr);
             }
         }
         else if (typeof(IResult).IsAssignableFrom(returnType))
@@ -1562,6 +1654,105 @@ public static partial class RequestDelegateFactory
         EnsureRequestTaskOfNotNull(task);
 
         await EnsureRequestResultNotNull(await task).ExecuteAsync(httpContext);
+    }
+
+    private static Task ExecuteAwaitableVoidResult<TAwaitable, TAwaiter>(
+        ConventionBasedVoidAwaitable<TAwaitable, TAwaiter> awaitable)
+    {
+        static async Task ExecuteAwaited(ConventionBasedVoidAwaitable<TAwaitable, TAwaiter> awaitable)
+        {
+            await awaitable;
+        }
+
+        var awaiter = awaitable.GetAwaiter();
+
+        if (awaiter.IsCompleted)
+        {
+            awaiter.GetResult();
+            return Task.CompletedTask;
+        }
+
+        return ExecuteAwaited(awaitable);
+    }
+
+    private static async Task ExecuteAwaitableObjectResult<TAwaitable, TAwaiter>(
+        ConventionBasedAwaitable<TAwaitable, TAwaiter, object> awaitable, HttpContext httpContext)
+    {
+        var obj = await awaitable;
+
+        if (obj is IResult result)
+        {
+            await ExecuteResultWriteResponse(result, httpContext);
+        }
+        else if (obj is string stringValue)
+        {
+            SetPlaintextContentType(httpContext);
+            await httpContext.Response.WriteAsync(stringValue);
+        }
+        else
+        {
+            // Otherwise, we JSON serialize when we reach the terminal state
+            // Call WriteAsJsonAsync<object?>() to serialize the runtime return type rather than the declared return type.
+            await httpContext.Response.WriteAsJsonAsync<object?>(obj);
+        }
+    }
+
+    private static Task ExecuteAwaitableResult<TAwaitable, TAwaiter, TResult>(
+        ConventionBasedAwaitable<TAwaitable, TAwaiter, TResult> awaitable,
+        HttpContext httpContext) where TResult : IResult
+    {
+        static async Task ExecuteAwaited(ConventionBasedAwaitable<TAwaitable, TAwaiter, TResult> awaitable, HttpContext httpContext)
+        {
+            await EnsureRequestResultNotNull(await awaitable).ExecuteAsync(httpContext);
+        }
+
+        var awaiter = awaitable.GetAwaiter();
+        if (awaiter.IsCompleted)
+        {
+            return EnsureRequestResultNotNull(awaiter.GetResult()).ExecuteAsync(httpContext);
+        }
+
+        return ExecuteAwaited(awaitable, httpContext);
+    }
+
+    private static Task ExecuteAwaitableStringResult<TAwaitable, TAwaiter>(
+        ConventionBasedAwaitable<TAwaitable, TAwaiter, string> awaitable,
+        HttpContext httpContext)
+    {
+        SetPlaintextContentType(httpContext);
+
+        static async Task ExecuteAwaited(ConventionBasedAwaitable<TAwaitable, TAwaiter, string> awaitable, HttpContext httpContext)
+        {
+            await httpContext.Response.WriteAsync(await awaitable);
+        }
+
+        var awaiter = awaitable.GetAwaiter();
+        if (awaiter.IsCompleted)
+        {
+            return httpContext.Response.WriteAsync(awaiter.GetResult());
+        }
+
+        return ExecuteAwaited(awaitable, httpContext);
+    }
+
+    private static Task ExecuteAwaitableOfTResult<TAwaitable, TAwaiter, TResult>(
+        ConventionBasedAwaitable<TAwaitable, TAwaiter, TResult> awaitable, HttpContext httpContext)
+    {
+        static async Task ExecuteAwaited(ConventionBasedAwaitable<TAwaitable, TAwaiter, TResult> awaitable, HttpContext httpContext)
+        {
+            // Call WriteAsJsonAsync<object?>() to serialize the runtime return type rather than the declared return type.
+            await httpContext.Response.WriteAsJsonAsync<object?>(await awaitable);
+        }
+
+        var awaiter = awaitable.GetAwaiter();
+
+        if (awaiter.IsCompleted)
+        {
+            // Call WriteAsJsonAsync<object?>() to serialize the runtime return type rather than the declared return type.
+            return httpContext.Response.WriteAsJsonAsync<object?>(awaiter.GetResult());
+        }
+
+        return ExecuteAwaited(awaitable, httpContext);
     }
 
     private static async Task ExecuteResultWriteResponse(IResult? result, HttpContext httpContext)

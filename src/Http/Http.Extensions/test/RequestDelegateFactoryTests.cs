@@ -13,6 +13,7 @@ using System.Net.Sockets;
 using System.Numerics;
 using System.Reflection;
 using System.Reflection.Metadata;
+using System.Runtime.CompilerServices;
 using System.Security.Claims;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
@@ -71,6 +72,12 @@ public class RequestDelegateFactoryTests : LoggedTest
                 return ValueTask.CompletedTask;
             }
 
+            CustomAwaitable StaticAwaitableTestAction(HttpContext httpContext)
+            {
+                MarkAsInvoked(httpContext);
+                return new CustomAwaitable(Task.CompletedTask);
+            }
+
             void MarkAsInvoked(HttpContext httpContext)
             {
                 httpContext.Items.Add("invoked", true);
@@ -84,6 +91,7 @@ public class RequestDelegateFactoryTests : LoggedTest
                     new object[] { (Action<HttpContext>)StaticTestAction },
                     new object[] { (Func<HttpContext, Task>)StaticTaskTestAction },
                     new object[] { (Func<HttpContext, ValueTask>)StaticValueTaskTestAction },
+                    new object[] { (Func<HttpContext, CustomAwaitable>)StaticAwaitableTestAction },
                 };
         }
     }
@@ -2281,6 +2289,7 @@ public class RequestDelegateFactoryTests : LoggedTest
             static Todo StaticTestAction() => new Todo { Name = "Write even more tests!" };
             static Task<Todo> StaticTaskTestAction() => Task.FromResult(new Todo { Name = "Write even more tests!" });
             static ValueTask<Todo> StaticValueTaskTestAction() => ValueTask.FromResult(new Todo { Name = "Write even more tests!" });
+            static CustomAwaitable<Todo> StaticAwaitableTestAction() => new CustomAwaitable<Todo>(Task.FromResult(new Todo { Name = "Write even more tests!" }));
 
             return new List<object[]>
                 {
@@ -2290,6 +2299,7 @@ public class RequestDelegateFactoryTests : LoggedTest
                     new object[] { (Func<Todo>)StaticTestAction},
                     new object[] { (Func<Task<Todo>>)StaticTaskTestAction},
                     new object[] { (Func<ValueTask<Todo>>)StaticValueTaskTestAction},
+                    new object[] { (Func<CustomAwaitable<Todo>>)StaticAwaitableTestAction},
                 };
         }
     }
@@ -2342,6 +2352,8 @@ public class RequestDelegateFactoryTests : LoggedTest
                 return originalTodo;
             }
 
+            CustomAwaitable<Todo> AwaitableTestAction() => new CustomAwaitable<Todo>(Task.FromResult<Todo>(originalTodo));
+
             return new List<object[]>
                 {
                     new object[] { (Func<Todo>)TestAction },
@@ -2349,6 +2361,7 @@ public class RequestDelegateFactoryTests : LoggedTest
                     new object[] { (Func<Task<Todo>>)TaskTestActionAwaited},
                     new object[] { (Func<ValueTask<Todo>>)ValueTaskTestAction},
                     new object[] { (Func<ValueTask<Todo>>)ValueTaskTestActionAwaited},
+                    new object[] { (Func<CustomAwaitable<Todo>>)AwaitableTestAction},
                 };
         }
     }
@@ -2385,15 +2398,18 @@ public class RequestDelegateFactoryTests : LoggedTest
             CustomResult TestAction() => new CustomResult(resultString);
             Task<CustomResult> TaskTestAction() => Task.FromResult(new CustomResult(resultString));
             ValueTask<CustomResult> ValueTaskTestAction() => ValueTask.FromResult(new CustomResult(resultString));
+            CustomAwaitable<CustomResult> AwaitableTestAction() => new CustomAwaitable<CustomResult>(Task.FromResult(new CustomResult(resultString)));
 
             static CustomResult StaticTestAction() => new CustomResult("Still not enough tests!");
             static Task<CustomResult> StaticTaskTestAction() => Task.FromResult(new CustomResult("Still not enough tests!"));
             static ValueTask<CustomResult> StaticValueTaskTestAction() => ValueTask.FromResult(new CustomResult("Still not enough tests!"));
+            static CustomAwaitable<CustomResult> StaticAwaitableTestAction() => new CustomAwaitable<CustomResult>(Task.FromResult(new CustomResult("Still not enough tests!")));
 
             // Object return type where the object is IResult
             static object StaticResultAsObject() => new CustomResult("Still not enough tests!");
             static object StaticResultAsTaskObject() => Task.FromResult<object>(new CustomResult("Still not enough tests!"));
             static object StaticResultAsValueTaskObject() => ValueTask.FromResult<object>(new CustomResult("Still not enough tests!"));
+            static object StaticResultAsAwaitableObject() => new CustomAwaitable<object>(Task.FromResult<object>(new CustomResult("Still not enough tests!")));
 
             // Object return type where the object is Task<IResult>
             static object StaticResultAsTaskIResult() => Task.FromResult<IResult>(new CustomResult("Still not enough tests!"));
@@ -2401,36 +2417,47 @@ public class RequestDelegateFactoryTests : LoggedTest
             // Object return type where the object is ValueTask<IResult>
             static object StaticResultAsValueTaskIResult() => ValueTask.FromResult<IResult>(new CustomResult("Still not enough tests!"));
 
+            // Object return type where the object is ValueTask<IResult>
+            static object StaticResultAsAwaitableIResult() => new CustomAwaitable<IResult>(Task.FromResult<IResult>(new CustomResult("Still not enough tests!")));
+
             // Task<object> return type
             static Task<object> StaticTaskOfIResultAsObject() => Task.FromResult<object>(new CustomResult("Still not enough tests!"));
             static ValueTask<object> StaticValueTaskOfIResultAsObject() => ValueTask.FromResult<object>(new CustomResult("Still not enough tests!"));
+            static CustomAwaitable<object> StaticAwaitableOfIResultAsObject() => new CustomAwaitable<object>(Task.FromResult<object>(new CustomResult("Still not enough tests!")));
 
             StructResult TestStructAction() => new StructResult(resultString);
             Task<StructResult> TaskTestStructAction() => Task.FromResult(new StructResult(resultString));
             ValueTask<StructResult> ValueTaskTestStructAction() => ValueTask.FromResult(new StructResult(resultString));
+            CustomAwaitable<StructResult> AwaitableTestStructAction() => new CustomAwaitable<StructResult>(Task.FromResult(new StructResult(resultString))); 
 
             return new List<object[]>
                 {
                     new object[] { (Func<CustomResult>)TestAction },
                     new object[] { (Func<Task<CustomResult>>)TaskTestAction},
                     new object[] { (Func<ValueTask<CustomResult>>)ValueTaskTestAction},
+                    new object[] { (Func<CustomAwaitable<CustomResult>>)AwaitableTestAction},
                     new object[] { (Func<CustomResult>)StaticTestAction},
                     new object[] { (Func<Task<CustomResult>>)StaticTaskTestAction},
                     new object[] { (Func<ValueTask<CustomResult>>)StaticValueTaskTestAction},
+                    new object[] { (Func<CustomAwaitable<CustomResult>>)StaticAwaitableTestAction},
 
                     new object[] { (Func<object>)StaticResultAsObject},
                     new object[] { (Func<object>)StaticResultAsTaskObject},
                     new object[] { (Func<object>)StaticResultAsValueTaskObject},
+                    new object[] { (Func<object>)StaticResultAsAwaitableObject},
 
                     new object[] { (Func<object>)StaticResultAsTaskIResult},
                     new object[] { (Func<object>)StaticResultAsValueTaskIResult},
+                    new object[] { (Func<object>)StaticResultAsAwaitableIResult},
 
                     new object[] { (Func<Task<object>>)StaticTaskOfIResultAsObject},
                     new object[] { (Func<ValueTask<object>>)StaticValueTaskOfIResultAsObject},
+                    new object[] { (Func<CustomAwaitable<object>>)StaticAwaitableOfIResultAsObject},
 
                     new object[] { (Func<StructResult>)TestStructAction },
                     new object[] { (Func<Task<StructResult>>)TaskTestStructAction },
                     new object[] { (Func<ValueTask<StructResult>>)ValueTaskTestStructAction },
+                    new object[] { (Func<CustomAwaitable<StructResult>>)AwaitableTestStructAction },
                 };
         }
     }
@@ -4200,6 +4227,27 @@ public class RequestDelegateFactoryTests : LoggedTest
         Assert.Equal(400, badHttpRequestException.StatusCode);
     }
 
+    [Fact]
+    public async Task RequestDelegateCustomAwaitable()
+    {
+        var invoked = false;
+
+        CustomAwaitable TestAction()
+        {
+            var awaitable = new CustomAwaitable(Task.Delay(1000));
+            invoked = true;
+            return awaitable;
+        }
+
+        var httpContext = CreateHttpContext();
+
+        var factoryResult = RequestDelegateFactory.Create(TestAction);
+        var requestDelegate = factoryResult.RequestDelegate;
+
+        await requestDelegate(httpContext);
+        Assert.True(invoked);
+    }
+
     private DefaultHttpContext CreateHttpContext()
     {
         var responseFeature = new TestHttpResponseFeature();
@@ -4557,6 +4605,81 @@ public class RequestDelegateFactoryTests : LoggedTest
         public Task<X509Certificate2?> GetClientCertificateAsync(CancellationToken cancellationToken)
         {
             throw new NotImplementedException();
+        }
+    }
+
+    private class CustomAwaitable
+    {
+        private readonly Task _task;
+
+        public CustomAwaitable(Task task)
+        {
+            _task = task;
+        }
+
+        public CustomAwaiter GetAwaiter()
+            => new(_task);
+
+        public class CustomAwaiter : ICriticalNotifyCompletion
+        {
+            private readonly Task _task;
+
+            public CustomAwaiter(Task task)
+            {
+                _task = task;
+            }
+
+            public bool IsCompleted => _task.ConfigureAwait(false).GetAwaiter().IsCompleted;
+
+            public void OnCompleted(Action continuation)
+            {
+                _task.ConfigureAwait(false).GetAwaiter().OnCompleted(continuation);
+            }
+
+            public void UnsafeOnCompleted(Action continuation)
+            {
+                _task.ConfigureAwait(false).GetAwaiter().UnsafeOnCompleted(continuation);
+            }
+
+            public void GetResult()
+            {
+                _task.ConfigureAwait(false).GetAwaiter().GetResult();
+            }
+        }
+    }
+
+    private class CustomAwaitable<T>
+    {
+        private readonly Task<T> _task;
+
+        public CustomAwaitable(Task<T> task)
+        {
+            _task = task;
+        }
+
+        public CustomAwaiter<T> GetAwaiter()
+        {
+            return new CustomAwaiter<T>(_task);
+        }
+
+        public class CustomAwaiter<TResult> : ICriticalNotifyCompletion
+        {
+            private readonly Task<TResult> _task;
+            public CustomAwaiter(Task<TResult> task)
+            {
+                _task = task;
+            }
+            public bool IsCompleted
+                => _task.ConfigureAwait(false).GetAwaiter().IsCompleted;
+
+            public void OnCompleted(Action continuation)
+                => _task.ConfigureAwait(false).GetAwaiter().OnCompleted(continuation);
+
+            public void UnsafeOnCompleted(Action continuation)
+                => _task.ConfigureAwait(false).GetAwaiter().UnsafeOnCompleted(continuation);
+
+            public TResult GetResult()
+                => _task.ConfigureAwait(false).GetAwaiter().GetResult();
         }
     }
 }
